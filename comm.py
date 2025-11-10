@@ -20,7 +20,8 @@ END_DAY = 15
 SEED = 2021
 
 # 初赛待预测行为列表: 点赞、点击头像、收藏、转发
-ACTION_LIST = ["read_comment", "like", "click_avatar",  "forward"]
+ACTION_LIST = ["read_comment"]
+# ACTION_LIST = ["read_comment", "like", "click_avatar",  "forward"]
 # 复赛待预测行为列表
 # ACTION_LIST = ["read_comment", "like", "click_avatar",  "forward", "comment", "follow", "favorite"]
 # 用于构造特征的字段列表
@@ -172,10 +173,10 @@ def generate_sample(stage="offline_train"):
         # 同行为取按时间最近的样本（修改为按userid、feedid和action去重，保留最近一条）
         # 数据丢失风险: 每次循环都在前一次去重结果基础上继续去重，可能导致数据过度过滤。
         # 修正：一次性去重，保留用户-物品最近交互
-        # df = df.drop_duplicates(subset=['userid', 'feedid'], keep='last')
+        df = df.drop_duplicates(subset=['userid', 'feedid'], keep='last')
         "存在待改进空间：1. 负样本下采样比例； 2. 重复数据处理方式"
-        for action in ACTION_LIST:
-            df = df.drop_duplicates(subset=['userid', 'feedid', action], keep='last') # keep='last' 保留最后出现的重复记录
+        # for action in ACTION_LIST:
+        #     df = df.drop_duplicates(subset=['userid', 'feedid', action], keep='last') # keep='last' 保留最后出现的重复记录
         # 负样本下采样
         for action in ACTION_LIST:
             # 步骤1：选择后 ACTION_DAY_NUM[action 时间窗口内的数据

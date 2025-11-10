@@ -1,0 +1,14 @@
+第一次调参: num_epochs:10
+offline_train:
+{'read_comment': 0.7663301183342741, 'like': 0.7525713703436744, 'click_avatar': 0.8403181780621533, 'forward': 0.88122318848542}
+Weighted uAUC:  0.788489
+Time cost: 1700.22 s
+
+evaluate:
+{'read_comment': 0.5963764450276817, 'like': 0.5862106869203072, 'click_avatar': 0.6630655192047396, 'forward': 0.6413779230081421}
+Weighted uAUC:  0.611165
+
+submit:
+{'read_comment': 69.37212769843414, 'like': 57.468759856371015, 'click_avatar': 57.28782536199647, 'forward': 57.55537328617603}
+单个目标行为2000条样本平均预测耗时（毫秒）：60.42102155074442
+Time cost: 56.97 s

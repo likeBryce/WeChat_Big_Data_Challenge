@@ -11,11 +11,13 @@ import pandas as pd
 from numba import njit
 from scipy.stats import rankdata
 
-
-@njit
+ 
+@njit #装饰器： 将Python函数编译为机器码，大幅提升执行速度
 def _auc(actual, pred_ranks):
     n_pos = np.sum(actual)
     n_neg = len(actual) - n_pos
+    # # Mann-Whitney U统计量公式
+    # AUC = (sum_of_positive_ranks - n_pos*(n_pos+1)/2) / (n_pos * n_neg)
     return (np.sum(pred_ranks[actual == 1]) - n_pos*(n_pos+1)/2) / (n_pos*n_neg)
 
 
@@ -27,6 +29,7 @@ def fast_auc(actual, predicted):
 
 def uAUC(labels, preds, user_id_list):
     """Calculate user AUC"""
+    # 按用户分组预测和标签: 将预测值和真实标签按用户ID分组
     user_pred = defaultdict(lambda: [])
     user_truth = defaultdict(lambda: [])
     for idx, truth in enumerate(labels):
@@ -35,7 +38,10 @@ def uAUC(labels, preds, user_id_list):
         truth = labels[idx]
         user_pred[user_id].append(pred)
         user_truth[user_id].append(truth)
-
+    
+    # 筛选有效用户
+    # 有效用户：同时有正样本和负样本
+    # 无效用户：只有正样本或只有负样本
     user_flag = defaultdict(lambda: False)
     for user_id in set(user_id_list):
         truths = user_truth[user_id]
@@ -49,6 +55,7 @@ def uAUC(labels, preds, user_id_list):
 
     total_auc = 0.0
     size = 0.0
+    # 对有效用户计算AUC并求平均
     for user_id in user_flag:
         if user_flag[user_id]:
             auc = fast_auc(np.asarray(user_truth[user_id]), np.asarray(user_pred[user_id]))

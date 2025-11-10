@@ -17,8 +17,8 @@ flags.DEFINE_string('model_checkpoint_dir', './data/model', 'model dir')
 flags.DEFINE_string('root_path', './data/', 'data dir')
 flags.DEFINE_integer('batch_size', 128, 'batch_size')
 flags.DEFINE_integer('embed_dim', 10, 'embed_dim')
-flags.DEFINE_float('learning_rate', 0.1, 'learning_rate')
-flags.DEFINE_float('embed_l2', None, 'embedding l2 reg')
+flags.DEFINE_float('learning_rate', 0.001, 'learning_rate')
+flags.DEFINE_float('embed_l2', 0.001, 'embedding l2 reg')
 
 SEED = 2021
 
@@ -34,8 +34,8 @@ class WideAndDeep(object):
         :param action: String. Including "read_comment"/"like"/"click_avatar"/"favorite"/"forward"/"comment"/"follow"
         """
         super(WideAndDeep, self).__init__()
-        self.num_epochs_dict = {"read_comment": 1, "like": 1, "click_avatar": 1, "favorite": 1, "forward": 1,
-                                "comment": 1, "follow": 1}
+        self.num_epochs_dict = {"read_comment": 5, "like": 5, "click_avatar": 5, "favorite": 5, "forward": 5,
+                                "comment": 5, "follow": 5}
         self.estimator = None
         self.linear_feature_columns = linear_feature_columns
         self.dnn_feature_columns = dnn_feature_columns
@@ -55,15 +55,18 @@ class WideAndDeep(object):
         elif self.stage in ["online_train", "offline_train"]:
             # 训练时如果模型目录已存在，则清空目录
             del_file(model_checkpoint_stage_dir)
-        optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, beta1=0.9, beta2=0.999,
-                                           epsilon=1)
+        # optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, beta1=0.9, beta2=0.999,
+        #                                    epsilon=1)
+        optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
         config = tf.estimator.RunConfig(model_dir=model_checkpoint_stage_dir, tf_random_seed=SEED)
         self.estimator = tf.estimator.DNNLinearCombinedClassifier(
             model_dir=model_checkpoint_stage_dir,
             linear_feature_columns=self.linear_feature_columns,
             dnn_feature_columns=self.dnn_feature_columns,
-            dnn_hidden_units=[32, 8],
+            dnn_hidden_units=[128, 64],
             dnn_optimizer=optimizer,
+            dnn_dropout=0.2,  # 防止过拟合
+            batch_norm=True, # 批量归一化（如果适用）
             config=config)
 
     def df_to_dataset(self, df, stage, action, shuffle=True, batch_size=128, num_epochs=1):
@@ -108,6 +111,15 @@ class WideAndDeep(object):
                                                                       day=STAGE_END_DAY[self.stage])
         stage_dir = os.path.join(FLAGS.root_path, self.stage, file_name)
         df = pd.read_csv(stage_dir)
+        # 数据质量检查
+        print(f"=== 数据质量检查 for {self.action} ===")
+        print(f"样本数量: {len(df)}")
+        if self.action in df.columns:
+            positive_ratio = df[self.action].mean()
+            print(f"正样本比例: {positive_ratio:.4f}")
+            if positive_ratio < 0.01 or positive_ratio > 0.99:
+                print(f"警告: 检测到严重的类别不平衡!")
+
         self.estimator.train(
             input_fn=lambda: self.input_fn_train(df, self.stage, self.action, self.num_epochs_dict[self.action])
         )
@@ -125,6 +137,7 @@ class WideAndDeep(object):
         file_name = "{stage}_{action}_{day}_concate_sample.csv".format(stage=self.stage, action=action,
                                                                       day=STAGE_END_DAY[self.stage])
         evaluate_dir = os.path.join(FLAGS.root_path, self.stage, file_name)
+
         df = pd.read_csv(evaluate_dir)
         userid_list = df['userid'].astype(str).tolist()
         predicts = self.estimator.predict(
@@ -178,11 +191,15 @@ def get_feature_columns():
     dnn_feature_columns = list()
     linear_feature_columns = list()
     # DNN features
+    # "userid": 特征名; 40000: 哈希桶的数量，即将所有的userid哈希到0到39999的范围; tf.int64: 特征的数据类型
+    # 为什么需要哈希？问题：原始ID范围可能很大且稀疏; 解决方案：哈希到固定范围
     user_cate = fc.categorical_column_with_hash_bucket("userid", 40000, tf.int64)
     feed_cate = fc.categorical_column_with_hash_bucket("feedid", 240000, tf.int64)
     author_cate = fc.categorical_column_with_hash_bucket("authorid", 40000, tf.int64)
     bgm_singer_cate = fc.categorical_column_with_hash_bucket("bgm_singer_id", 40000, tf.int64)
     bgm_song_cate = fc.categorical_column_with_hash_bucket("bgm_song_id", 60000, tf.int64)
+
+    # 分类特征通常用于创建嵌入向量
     user_embedding = fc.embedding_column(user_cate, FLAGS.embed_dim, max_norm=FLAGS.embed_l2)
     feed_embedding = fc.embedding_column(feed_cate, FLAGS.embed_dim, max_norm=FLAGS.embed_l2)
     author_embedding = fc.embedding_column(author_cate, FLAGS.embed_dim, max_norm=FLAGS.embed_l2)
@@ -193,11 +210,13 @@ def get_feature_columns():
     dnn_feature_columns.append(author_embedding)
     dnn_feature_columns.append(bgm_singer_embedding)
     dnn_feature_columns.append(bgm_song_embedding)
+
     # Linear features
     video_seconds = fc.numeric_column("videoplayseconds", default_value=0.0)
     device = fc.numeric_column("device", default_value=0.0)
     linear_feature_columns.append(video_seconds)
     linear_feature_columns.append(device)
+
     # 行为统计特征
     for b in FEA_COLUMN_LIST:
         feed_b = fc.numeric_column(b+"sum", default_value=0.0)
@@ -207,7 +226,7 @@ def get_feature_columns():
     return dnn_feature_columns, linear_feature_columns
 
 
-def main(argv):
+def main(argv): #argv 参数用于接收命令行参数： argv[0]：脚本名称 argv[1]：第一个参数 argv[2]：第二个参数，依此类推
     t = time.time() 
     dnn_feature_columns, linear_feature_columns = get_feature_columns()
     stage = argv[1]
