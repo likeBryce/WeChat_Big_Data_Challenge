@@ -4,25 +4,34 @@ import os
 import time
 import numpy as np
 import pandas as pd
+# # 这行代码是 TensorFlow 1.x 兼容模式导入：
+# TensorFlow 2.x 默认使用 Eager Execution（即时执行）
+# TensorFlow 1.x 使用 Graph Execution（图执行）
+# 这行代码让 TensorFlow 2.x 环境能够运行 1.x 风格的代码
 import tensorflow.compat.v1 as tf
+
 from tensorflow import feature_column as fc
 from comm import ACTION_LIST, STAGE_END_DAY, FEA_COLUMN_LIST
 from evaluation import uAUC, compute_weighted_score
 
+# 这段代码使用了 TensorFlow 的命令行参数解析系统。让我详细解释每一部分：
+# 这是 TensorFlow 1.x 风格的命令行参数定义，用于配置模型的超参数和路径。
+flags = tf.app.flags # TensorFlow 的参数解析模块
+FLAGS = flags.FLAGS # 全局对象，用于存储和访问所有定义的参数
 
-flags = tf.app.flags
-FLAGS = flags.FLAGS
+# 名称: model_checkpoint_dir  默认值: './data/model'  描述: 'model dir'
+flags.DEFINE_string('model_checkpoint_dir', './data/model', 'model dir') # 模型检查点路径: 定义模型保存和加载的目录路径
+flags.DEFINE_string('root_path', './data/', 'data dir') # 数据根路径: 定义数据文件的根目录
+flags.DEFINE_integer('batch_size', 128, 'batch_size') # 批量大小: 定义训练时每个批次的样本数量
+flags.DEFINE_integer('embed_dim', 10, 'embed_dim') # 嵌入维度: 定义嵌入向量的维度大小
+flags.DEFINE_float('learning_rate', 0.1, 'learning_rate') # 学习率: 定义优化器的学习率
+flags.DEFINE_float('embed_l2', None, 'embedding l2 reg') # L2 正则化: 定义嵌入层的 L2 正则化系数
 
-flags.DEFINE_string('model_checkpoint_dir', './data/model', 'model dir')
-flags.DEFINE_string('root_path', './data/', 'data dir')
-flags.DEFINE_integer('batch_size', 128, 'batch_size')
-flags.DEFINE_integer('embed_dim', 10, 'embed_dim')
-flags.DEFINE_float('learning_rate', 0.001, 'learning_rate')
-flags.DEFINE_float('embed_l2', 0.001, 'embedding l2 reg')
-
+# 在代码中访问示例:
+# print(f"批量大小: {FLAGS.batch_size}")
+# print(f"学习率: {FLAGS.learning_rate}")
+# print(f"模型路径: {FLAGS.model_checkpoint_dir}")
 SEED = 2021
-
-
 
 class WideAndDeep(object):
 
@@ -56,18 +65,48 @@ class WideAndDeep(object):
             # 训练时如果模型目录已存在，则清空目录
             del_file(model_checkpoint_stage_dir)
         # optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate, beta1=0.9, beta2=0.999,
-        #                                    epsilon=1)
+        #                                    epsilon=1) # 数值稳定性的常数（通常很小，这里设为1可能是个调优结果）
         optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
         config = tf.estimator.RunConfig(model_dir=model_checkpoint_stage_dir, tf_random_seed=SEED)
         self.estimator = tf.estimator.DNNLinearCombinedClassifier(
             model_dir=model_checkpoint_stage_dir,
-            linear_feature_columns=self.linear_feature_columns,
-            dnn_feature_columns=self.dnn_feature_columns,
-            dnn_hidden_units=[128, 64],
-            dnn_optimizer=optimizer,
+            linear_feature_columns=self.linear_feature_columns, # Linear部分：记忆（Memorization）- 处理稀疏特征, 学习特征组合, 示例：用户A经常点击作者B的内容
+            dnn_feature_columns=self.dnn_feature_columns, # DNN部分：泛化（Generalization）- 处理稠密特征和嵌入向量, 学习特征深层交互, 示例：基于用户历史行为预测新内容偏好
+            dnn_hidden_units=[128, 64], # 两个隐藏层，神经元数分别为32和8; # 第一层32神经元：学习复杂特征交互; 第二层8神经元：提取核心特征表示; 防止过拟合，提高泛化能力
+            dnn_optimizer=optimizer, # 使用配置的Adam优化器
             dnn_dropout=0.2,  # 防止过拟合
             batch_norm=True, # 批量归一化（如果适用）
             config=config)
+        """
+        记忆的工作原理: 
+        用户A + 视频B → 点击 (正样本)
+        用户A + 视频B → 点击 (正样本)  
+        用户A + 视频B → 点击 (正样本)
+        Linear部分学习:
+        权重[用户A_视频B] = +3.2  (高权重，表示强关联)
+
+        泛化的工作原理:
+        # DNN学习到的模式
+        用户A喜欢视频X (在训练数据中)
+        用户B的嵌入向量 ≈ 用户A的嵌入向量 (相似用户)
+        视频Y的嵌入向量 ≈ 视频X的嵌入向量 (相似视频)
+
+        # 泛化预测：用户B也可能喜欢视频Y
+        即使用户B和视频Y从未在训练数据中共现过！
+
+        # 可以尝试不同的学习率
+        optimizers = {
+        'high_lr': tf.train.AdamOptimizer(learning_rate=0.1),
+        'medium_lr': tf.train.AdamOptimizer(learning_rate=0.01),
+        'low_lr': tf.train.AdamOptimizer(learning_rate=0.001)}
+
+        # 不同的网络结构实验
+        architectures = {
+            'small': [16, 4],      # 小网络
+            'medium': [32, 8],     # 中等网络（当前使用）
+            'large': [64, 16, 4],  # 大网络
+            'deep': [128, 64, 32, 8]  # 更深网络}
+        """
 
     def df_to_dataset(self, df, stage, action, shuffle=True, batch_size=128, num_epochs=1):
         '''
@@ -80,20 +119,20 @@ class WideAndDeep(object):
         :param num_epochs: Int. Epochs num
         :return: tf.data.Dataset object. 
         '''
-        print(df.shape)
-        print(df.columns)
-        print("batch_size: ", batch_size)
-        print("num_epochs: ", num_epochs)
-        if stage != "submit":
+        # print(df.shape)
+        # print(df.columns)
+        # print("batch_size: ", batch_size)
+        # print("num_epochs: ", num_epochs)
+        if stage != "submit": # 如果不是提交阶段（submit），则数据集包含特征和标签。
             label = df[action]
             ds = tf.data.Dataset.from_tensor_slices((dict(df), label))
-        else:
+        else: # 如果是提交阶段，则数据集只包含特征（没有标签）。
             ds = tf.data.Dataset.from_tensor_slices((dict(df)))
         if shuffle:
-            ds = ds.shuffle(buffer_size=len(df), seed=SEED)
+            ds = ds.shuffle(buffer_size=len(df), seed=SEED) # 在训练时打乱数据顺序，防止模型学习到数据顺序
         ds = ds.batch(batch_size)
         if stage in ["online_train", "offline_train"]:
-            ds = ds.repeat(num_epochs)
+            ds = ds.repeat(num_epochs) # 在训练阶段重复数据集多个epoch
         return ds
 
     def input_fn_train(self, df, stage, action, num_epochs):
